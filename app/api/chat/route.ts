@@ -57,7 +57,7 @@ export async function POST(req: Request) {
       take: 50,
     });
 
-    const aiMessages: { role: 'system' | 'user' | 'assistant'; content: string }[] = history.map((m) => ({
+    const aiMessages: { role: 'system' | 'user' | 'assistant'; content: string }[] = history.map((m: { role: string; content: string }) => ({
       role: m.role as 'user' | 'assistant',
       content: m.content,
     }));
@@ -73,7 +73,7 @@ export async function POST(req: Request) {
         try {
           // Status: Initializing & Memory retrieval
           sendSSE({ type: 'status', status: 'Analyzing request & retrieving memories...' });
-          
+
           const memories = await retrieveRelevantMemories(userId, message.trim());
           let memoryPrompt = "";
           if (memories.length > 0) {
@@ -104,7 +104,7 @@ export async function POST(req: Request) {
             const rateLimit = await consumeRateLimit(userId, step.intent);
             if (!rateLimit.allowed) {
               const limitMsg = `⚠️ **Daily Rate Limit Exceeded** for **${step.intent}** agent.\n\nYou have used all **${rateLimit.limit}** allowed requests for today. Limit resets at **${rateLimit.resetTime}**.`;
-              
+
               const assistantMessage = await prisma.message.create({
                 data: {
                   conversationId: convId,
@@ -170,14 +170,14 @@ export async function POST(req: Request) {
             } else {
               // Non-chat agents (Image, Search, Code, PDF, Voice)
               sendSSE({ type: 'status', status: `Processing with ${step.intent}...` });
-              
+
               const agentResponse = await dispatchToAgent(step.intent, step.extractedQuery, fullChatContext, userId);
-              
+
               let parsedSources: any = undefined;
               if (agentResponse.sources) {
                 try {
                   parsedSources = JSON.parse(agentResponse.sources);
-                } catch(e) {}
+                } catch (e) { }
               }
 
               const assistantMessage = await prisma.message.create({
