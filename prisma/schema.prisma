@@ -1,0 +1,62 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String          @id @default(cuid())
+  name           String
+  email          String          @unique
+  passwordHash   String?
+  createdAt      DateTime        @default(now())
+  conversations  Conversation[]
+  generatedFiles GeneratedFile[]
+  memories       UserMemory[]
+}
+
+model Conversation {
+  id        String    @id @default(cuid())
+  userId    String
+  title     String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  messages  Message[]
+  user      User      @relation(fields: [userId], references: [id])
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  role           String
+  content        String
+  agentType      String?
+  imageUrl       String?
+  sources        Json?
+  executionOutput String?
+  fileUrl        String?
+  audioUrl       String?
+  createdAt      DateTime     @default(now())
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+}
+
+model GeneratedFile {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String
+  url       String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model UserMemory {
+  id         String   @id @default(cuid())
+  userId     String
+  memoryText String
+  embedding  Unsupported("vector(768)")
+  createdAt  DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id])
+}
