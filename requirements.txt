@@ -1,0 +1,110 @@
+# ============================================================
+# Synthox AI — Project Dependencies
+# ============================================================
+# NOTE: This is a Node.js / Next.js project.
+# "requirements.txt" is a Python convention.
+# The actual package manager file is: package.json
+#
+# To install all dependencies, run:
+#   npm install
+#
+# Node.js version required: >= 18.x
+# Package manager: npm (>= 9.x)
+# ============================================================
+
+
+# ─────────────────────────────────────────────
+# 🚀 Core Framework
+# ─────────────────────────────────────────────
+next@^16.2.10              # Next.js App Router framework (React SSR + API routes)
+react@^18                  # React UI library
+react-dom@^18              # React DOM renderer
+
+
+# ─────────────────────────────────────────────
+# 🔐 Authentication
+# ─────────────────────────────────────────────
+next-auth@^5.0.0-beta.31   # Authentication (Credentials + Google OAuth) — Auth.js v5
+bcryptjs@^3.0.3            # Password hashing for credential-based login
+
+
+# ─────────────────────────────────────────────
+# 🗄️ Database & ORM
+# ─────────────────────────────────────────────
+prisma@^6.19.3             # Prisma ORM CLI (schema migrations)
+@prisma/client@^6.19.3     # Prisma client for database queries
+                            # Database: Neon Serverless PostgreSQL
+
+
+# ─────────────────────────────────────────────
+# 🤖 AI & Agent Integrations
+# ─────────────────────────────────────────────
+# Groq API         — Chat agent, Router agent (Llama 3.3 70B) — via native fetch (no SDK needed)
+# Google Gemini    — Fallback AI model — via native fetch
+# SerpAPI          — Web search agent (Google Search results) — via native fetch
+# Tavily           — Web search fallback — via native fetch
+# Pollinations.ai  — Image generation (FLUX model) — via native fetch
+# Hugging Face     — Image generation fallback — via native fetch
+# Wandbox          — Code execution sandbox — via native fetch
+# Judge0           — Code execution (via RapidAPI) — via native fetch
+# Microsoft Edge TTS — Voice/speech synthesis
+msedge-tts@^2.0.7          # Microsoft Edge TTS for voice generation (on-device TTS)
+
+
+# ─────────────────────────────────────────────
+# 📁 File & Media Storage
+# ─────────────────────────────────────────────
+cloudinary@^2.10.0         # Cloud image/audio storage and delivery (Cloudinary SDK)
+pdf-lib@^1.17.1            # PDF generation from text/data
+
+
+# ─────────────────────────────────────────────
+# ⚡ Rate Limiting & Caching
+# ─────────────────────────────────────────────
+ioredis@^5.11.1            # Redis client for persistent rate limiting (optional)
+                            # Falls back to in-memory rate limiting if REDIS_URL not set
+
+
+# ─────────────────────────────────────────────
+# 🎨 UI & Animation
+# ─────────────────────────────────────────────
+framer-motion@^12.42.2     # Page transitions and animations
+react-markdown@^10.1.0     # Render markdown in chat messages
+react-syntax-highlighter@^16.1.1  # Code block syntax highlighting in chat
+remark-gfm@^4.0.1          # GitHub Flavored Markdown support (tables, checkboxes etc.)
+
+
+# ─────────────────────────────────────────────
+# 🛠️ Dev Dependencies (build tools only)
+# ─────────────────────────────────────────────
+typescript@^5                          # TypeScript compiler
+@types/node@^20                        # Node.js type definitions
+@types/react@^18                       # React type definitions
+@types/react-dom@^18                   # React DOM type definitions
+@types/bcryptjs@^2.4.6                 # bcryptjs type definitions
+@types/react-syntax-highlighter@^15.5.13  # Syntax highlighter types
+eslint@^8                              # Linting
+eslint-config-next@^16.2.10            # Next.js ESLint config
+postcss@^8                             # CSS processing
+tailwindcss@^3.4.1                     # Utility CSS (used for layout utilities)
+
+
+# ─────────────────────────────────────────────
+# 🔑 Required Environment Variables (.env)
+# ─────────────────────────────────────────────
+# DATABASE_URL              — Neon PostgreSQL connection string
+# AUTH_SECRET               — NextAuth v5 secret key
+# NEXTAUTH_SECRET           — NextAuth legacy secret (same value)
+# AUTH_URL                  — Production URL (e.g. https://your-app.vercel.app)
+# NEXTAUTH_URL              — Production URL (same as above)
+# GOOGLE_CLIENT_ID          — Google OAuth Client ID
+# GOOGLE_CLIENT_SECRET      — Google OAuth Client Secret
+# GROQ_API_KEY              — Groq API key (chat + router agent)
+# GEMINI_API_KEY            — Google Gemini API key (fallback AI)
+# SERPAPI_API_KEY           — SerpAPI key (web search)
+# TAVILY_API_KEY            — Tavily API key (web search fallback)
+# HUGGINGFACE_API_KEY       — Hugging Face API key (image gen fallback)
+# CLOUDINARY_URL            — Cloudinary API URL
+# CLOUDINARY_API            — Cloudinary API secret
+# JUDGE0_API_KEY            — Judge0 RapidAPI key (code execution)
+# REDIS_URL                 — (Optional) Redis URL for persistent rate limiting
