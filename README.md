@@ -6,7 +6,10 @@
 
 ## 🌟 Screenshots & Demo
 
-![Synthox AI Dashboard Overview](https://www.linkedin.com/posts/abdul-qadir-khan-9b32a22bb_ai-webdevelopment-nextjs-activity-7486796841338966017-0VT4?utm_source=share&utm_medium=member_desktop&rcm=ACoAAEzARRcBMC0HpGrVlUVZGOU0j0hn3HLsCE0)
+![Synthox AI Dashboard Overview](https://placehold.co/1200x600/111827/3B82F6?text=Synthox+AI+Dashboard+Overview)
+
+*![Demo GIF Placeholder](https://placehold.co/800x450/1f2937/9ca3af?text=Demo+GIF+Placeholder)*
+
 ---
 
 ## ✨ Features
