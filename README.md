@@ -6,9 +6,7 @@
 
 ## 🌟 Screenshots & Demo
 
-![Synthox AI Dashboard Overview](https://placehold.co/1200x600/111827/3B82F6?text=Synthox+AI+Dashboard+Overview)
-
-*![Demo GIF Placeholder](https://placehold.co/800x450/1f2937/9ca3af?text=Demo+GIF+Placeholder)*
+![Synthox AI Dashboard Overview](Images/Screenshot_25-7-2026_202520_multi-agent-ai-liart.vercel.app.jpeg)
 
 ---
 
