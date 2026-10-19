@@ -1,69 +1,105 @@
 import prisma from '@/lib/prisma';
 import { generateEmbedding } from './embeddings';
-import { getChatResponse } from '../chatAgent';
 
 interface ExtractionResult {
   facts: string[];
 }
 
-export async function extractMemoryFromConversation(recentMessages: any[], userId: string) {
+import { AI_CONFIG } from '../config';
+
+const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const EXTRACTION_MODEL = AI_CONFIG.chat.secondary.model; // openai/gpt-oss-20b
+const EXTRACTION_TIMEOUT_MS = 12000;
+
+async function extractFactsWithLLM(conversationText: string): Promise<string[]> {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) throw new Error('GROQ_API_KEY not set');
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), EXTRACTION_TIMEOUT_MS);
+
   try {
-    console.log(`[Memory] Checking conversation for user facts...`);
-    
-    // We format recent messages for the LLM
-    const formattedHistory = recentMessages
-      .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
-      .join('\n');
-
-    const prompt = `You are a memory processor. Analyze the conversation history below and extract any durable facts, preferences, or important details about the user that are worth remembering for future conversations.
-
-Avoid temporary facts (like "User is hungry right now").
-Focus on long-term values (e.g. "Ahmed prefers Python", "Ahmed is building a Next.js app", "Ahmed likes simple UI").
-Ignore details about the AI.
-
-Output strictly valid JSON with this format:
-{
-  "facts": ["extracted fact 1", "extracted fact 2"]
-}
+    const response = await fetch(GROQ_API_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: EXTRACTION_MODEL,
+        messages: [
+          { role: 'system', content: 'You must output strictly valid JSON. No markdown, no explanation.' },
+          {
+            role: 'user',
+            content: `Analyze the conversation below and extract durable facts about the user worth remembering across sessions.
+Avoid temporary facts. Focus on preferences, skills, goals, or identity facts.
+Return JSON in exactly this format: {"facts": ["fact 1", "fact 2"]}
+If no facts found, return {"facts": []}
 
 Conversation:
-${formattedHistory}`;
+${conversationText}`,
+          },
+        ],
+        temperature: 0.1,
+        max_tokens: 1024,
+        response_format: { type: 'json_object' },
+      }),
+      signal: controller.signal,
+    });
 
-    // Use Groq/Gemini to extract
-    const response = await getChatResponse([
-      { role: 'system', content: 'You must output strictly JSON.' },
-      { role: 'user', content: prompt }
-    ], 'Memory Extraction');
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`Groq memory extraction error (${response.status}): ${body}`);
+    }
+
+    const data = await response.json();
+    const rawText = data.choices?.[0]?.message?.content || '{"facts":[]}';
 
     let parsed: ExtractionResult;
     try {
-      // Find JSON block if LLM returned markdown
-      let jsonText = response.content.trim();
-      const jsonStart = jsonText.indexOf('{');
-      const jsonEnd = jsonText.lastIndexOf('}');
-      if (jsonStart !== -1 && jsonEnd !== -1) {
-        jsonText = jsonText.substring(jsonStart, jsonEnd + 1);
-      }
-      parsed = JSON.parse(jsonText);
-    } catch (parseError) {
-      console.warn('[Memory] Failed to parse extracted facts JSON:', response.content);
-      return;
+      const jsonStart = rawText.indexOf('{');
+      const jsonEnd = rawText.lastIndexOf('}');
+      parsed = JSON.parse(jsonStart !== -1 ? rawText.substring(jsonStart, jsonEnd + 1) : rawText);
+    } catch {
+      return [];
     }
 
-    if (!parsed.facts || !Array.isArray(parsed.facts) || parsed.facts.length === 0) {
+    return Array.isArray(parsed.facts) ? parsed.facts : [];
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if ((err as any)?.name === 'AbortError') {
+      console.warn('[Memory] Extraction timed out — skipping this round.');
+      return [];
+    }
+    throw err;
+  }
+}
+
+export async function extractMemoryFromConversation(recentMessages: any[], userId: string) {
+  try {
+    console.log(`[Memory] Checking conversation for user facts...`);
+
+    const formattedHistory = recentMessages
+      .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.slice(0, 400)}`)
+      .join('\n');
+
+    const facts = await extractFactsWithLLM(formattedHistory);
+
+    if (!facts || facts.length === 0) {
       console.log('[Memory] No facts extracted from this chunk.');
       return;
     }
 
-    console.log(`[Memory] Extracted facts:`, parsed.facts);
+    console.log(`[Memory] Extracted facts:`, facts);
 
-    for (const fact of parsed.facts) {
+    for (const fact of facts) {
       // 1. Generate embedding
       const embedding = await generateEmbedding(fact);
       const vectorString = `[${embedding.join(',')}]`;
 
-      // 2. Duplicate Check: Retrieve similar facts from this user
-      // Check if cosine distance is close (< 0.15 distance => > 0.85 similarity)
+      // 2. Duplicate Check
       const duplicateCheck: any[] = await prisma.$queryRawUnsafe(
         `SELECT "memoryText"
          FROM "UserMemory"
@@ -75,11 +111,11 @@ ${formattedHistory}`;
       );
 
       if (duplicateCheck.length > 0) {
-        console.log(`[Memory] Fact already remembered (similarity match): "${fact}"`);
+        console.log(`[Memory] Already remembered (similarity match): "${fact}"`);
         continue;
       }
 
-      // 3. Save memory using raw insert since pgvector isn't supported by prisma client natively
+      // 3. Save memory
       const memoryId = `mem_${Math.random().toString(36).substr(2, 9)}`;
       await prisma.$executeRawUnsafe(
         `INSERT INTO "UserMemory" (id, "userId", "memoryText", embedding)
@@ -93,6 +129,8 @@ ${formattedHistory}`;
     }
 
   } catch (error) {
+    // Memory extraction is non-critical — log and continue, never surface to user
     console.error('[Memory] Extraction failed:', error);
   }
 }
+

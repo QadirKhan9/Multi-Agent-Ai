@@ -11,9 +11,11 @@ interface ChatResponse {
   provider: string;
 }
 
-async function callGroq(messages: ChatMessage[]): Promise<string> {
+async function callGroq(messages: ChatMessage[], model?: string): Promise<string> {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error('GROQ_API_KEY is not set');
+
+  const chosenModel = model || AI_CONFIG.chat.primary.model;
 
   const response = await fetch(AI_CONFIG.chat.primary.apiUrl, {
     method: 'POST',
@@ -22,12 +24,12 @@ async function callGroq(messages: ChatMessage[]): Promise<string> {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: AI_CONFIG.chat.primary.model,
+      model: chosenModel,
       messages,
       temperature: 0.7,
-      max_tokens: 2048,
+      max_tokens: 4096,
     }),
-    signal: AbortSignal.timeout(30000), // 30s timeout
+    signal: AbortSignal.timeout(30000),
   });
 
   if (!response.ok) {
@@ -36,7 +38,7 @@ async function callGroq(messages: ChatMessage[]): Promise<string> {
   }
 
   const data = await response.json();
-  return data.choices[0]?.message?.content || '';
+  return data.choices[0]?.message?.content || data.choices[0]?.message?.reasoning || '';
 }
 
 async function callGemini(messages: ChatMessage[]): Promise<string> {
@@ -51,7 +53,8 @@ async function callGemini(messages: ChatMessage[]): Promise<string> {
       parts: [{ text: m.content }],
     }));
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`;
+  // Use the stable non-aliased model ID
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${AI_CONFIG.chat.fallback.model}:generateContent?key=${apiKey}`;
 
   const response = await fetch(url, {
     method: 'POST',
@@ -76,9 +79,11 @@ async function callGemini(messages: ChatMessage[]): Promise<string> {
   return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
 }
 
-async function callGroqStream(messages: ChatMessage[], onChunk: (chunk: string) => void): Promise<string> {
+async function callGroqStream(messages: ChatMessage[], onChunk: (chunk: string) => void, model?: string): Promise<string> {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error('GROQ_API_KEY is not set');
+
+  const chosenModel = model || AI_CONFIG.chat.primary.model;
 
   const response = await fetch(AI_CONFIG.chat.primary.apiUrl, {
     method: 'POST',
@@ -87,10 +92,10 @@ async function callGroqStream(messages: ChatMessage[], onChunk: (chunk: string) 
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: AI_CONFIG.chat.primary.model,
+      model: chosenModel,
       messages,
       temperature: 0.7,
-      max_tokens: 2048,
+      max_tokens: 4096,
       stream: true,
     }),
     signal: AbortSignal.timeout(30000),
@@ -106,6 +111,7 @@ async function callGroqStream(messages: ChatMessage[], onChunk: (chunk: string) 
   const reader = response.body.getReader();
   const decoder = new TextDecoder('utf-8');
   let fullContent = '';
+  let fullReasoning = '';
   let buffer = '';
 
   while (true) {
@@ -119,19 +125,29 @@ async function callGroqStream(messages: ChatMessage[], onChunk: (chunk: string) 
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed || trimmed === 'data: [DONE]') continue;
+
       if (trimmed.startsWith('data: ')) {
         try {
           const json = JSON.parse(trimmed.slice(6));
-          const token = json.choices?.[0]?.delta?.content || '';
+          const delta = json.choices?.[0]?.delta;
+          const token = delta?.content || '';
           if (token) {
             fullContent += token;
             onChunk(token);
+          } else if (delta?.reasoning) {
+            fullReasoning += delta.reasoning;
           }
         } catch (e) {
           // ignore parse errors on partial lines
         }
       }
     }
+  }
+
+  // If the reasoning model only returned reasoning without separate content, emit reasoning
+  if (!fullContent && fullReasoning) {
+    fullContent = fullReasoning;
+    onChunk(fullReasoning);
   }
 
   return fullContent;
@@ -149,7 +165,7 @@ async function callGeminiStream(messages: ChatMessage[], onChunk: (chunk: string
       parts: [{ text: m.content }],
     }));
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:streamGenerateContent?alt=sse&key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${AI_CONFIG.chat.fallback.model}:streamGenerateContent?alt=sse&key=${apiKey}`;
 
   const response = await fetch(url, {
     method: 'POST',
@@ -210,32 +226,50 @@ export async function getChatResponse(
   messages: ChatMessage[],
   agentName = 'Chat Agent'
 ): Promise<ChatResponse> {
-  return withFallback(
-    async () => {
-      const content = await callGroq(messages);
-      return { content, provider: 'groq' };
-    },
-    async () => {
-      const content = await callGemini(messages);
-      return { content, provider: 'gemini' };
-    },
-    agentName
-  );
+  // 3-tier fallback: GPT-OSS 120B -> GPT-OSS 20B -> Gemini 2.0 Flash
+  try {
+    const content = await callGroq(messages); // Primary (GPT-OSS 120B)
+    return { content, provider: 'groq-gpt-oss-120b' };
+  } catch (primaryErr) {
+    console.warn(`[${agentName}] Primary (GPT-OSS 120B) failed:`, (primaryErr as Error).message);
+    try {
+      const content = await callGroq(messages, AI_CONFIG.chat.secondary.model); // Secondary (GPT-OSS 20B)
+      return { content, provider: 'groq-gpt-oss-20b' };
+    } catch (secondaryErr) {
+      console.warn(`[${agentName}] Secondary (GPT-OSS 20B) failed:`, (secondaryErr as Error).message);
+      try {
+        const content = await callGemini(messages); // Gemini 2.0 Flash
+        return { content, provider: 'gemini' };
+      } catch (fallbackErr) {
+        console.error(`[${agentName}] All providers failed.`);
+        throw new Error(`${agentName} is temporarily unavailable. Please try again in a moment.`);
+      }
+    }
+  }
 }
 
 export async function getChatResponseStream(
   messages: ChatMessage[],
   onChunk: (chunk: string) => void
 ): Promise<ChatResponse> {
-  return withFallback(
-    async () => {
-      const content = await callGroqStream(messages, onChunk);
-      return { content, provider: 'groq' };
-    },
-    async () => {
-      const content = await callGeminiStream(messages, onChunk);
-      return { content, provider: 'gemini' };
-    },
-    'Chat Agent Streaming'
-  );
+  // 3-tier streaming fallback: GPT-OSS 120B -> GPT-OSS 20B -> Gemini 2.0 Flash
+  try {
+    const content = await callGroqStream(messages, onChunk);
+    return { content, provider: 'groq-gpt-oss-120b' };
+  } catch (primaryErr) {
+    console.warn('[Chat Agent Streaming] Primary (GPT-OSS 120B) failed:', (primaryErr as Error).message);
+    try {
+      const content = await callGroqStream(messages, onChunk, AI_CONFIG.chat.secondary.model);
+      return { content, provider: 'groq-gpt-oss-20b' };
+    } catch (secondaryErr) {
+      console.warn('[Chat Agent Streaming] Secondary (GPT-OSS 20B) failed:', (secondaryErr as Error).message);
+      try {
+        const content = await callGeminiStream(messages, onChunk);
+        return { content, provider: 'gemini' };
+      } catch (fallbackErr) {
+        console.error('[Chat Agent Streaming] All providers failed.');
+        throw new Error('Chat Agent Streaming is temporarily unavailable. Please try again in a moment.');
+      }
+    }
+  }
 }

@@ -71,19 +71,39 @@ export async function dispatchToAgent(
       }
 
     case 'web_search':
-      return await runSearchAgent(query, context);
+      try {
+        return await runSearchAgent(query, context);
+      } catch (error) {
+        return { agentType: 'web_search', content: `⚠️ Search failed: ${(error as Error).message}`, status: 'error' };
+      }
 
     case 'image_generation':
-      return await runImageAgent(query, userId);
+      try {
+        return await runImageAgent(query, userId);
+      } catch (error) {
+        return { agentType: 'image_generation', content: `⚠️ Image generation failed: ${(error as Error).message}`, status: 'error' };
+      }
 
     case 'pdf_generation':
-      return await runPdfAgent(query, context, userId);
+      try {
+        return await runPdfAgent(query, context, userId);
+      } catch (error) {
+        return { agentType: 'pdf_generation', content: `⚠️ PDF generation failed: ${(error as Error).message}`, status: 'error' };
+      }
 
     case 'code_generation':
-      return await runCodeAgent(query, context);
+      try {
+        return await runCodeAgent(query, context);
+      } catch (error) {
+        return { agentType: 'code_generation', content: `⚠️ Code execution failed: ${(error as Error).message}`, status: 'error' };
+      }
 
     case 'voice_generation':
-      return await runVoiceAgent(query, userId);
+      try {
+        return await runVoiceAgent(query, userId);
+      } catch (error) {
+        return { agentType: 'voice_generation', content: `⚠️ Voice synthesis failed: ${(error as Error).message}`, status: 'error' };
+      }
 
     default:
       return {

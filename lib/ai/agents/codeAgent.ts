@@ -20,9 +20,11 @@ const WANDBOX_COMPILER_NAMES: Record<string, string> = {
   rust: "rust-1.82.0",
 };
 
-async function callGroqCodeGen(messages: any[]): Promise<string> {
+async function callGroqCodeGen(messages: any[], model?: string): Promise<string> {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error('GROQ_API_KEY is not set');
+
+  const chosenModel = model || AI_CONFIG.chat.primary.model;
 
   const response = await fetch(AI_CONFIG.chat.primary.apiUrl, {
     method: 'POST',
@@ -31,18 +33,27 @@ async function callGroqCodeGen(messages: any[]): Promise<string> {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: AI_CONFIG.chat.primary.model,
+      model: chosenModel,
       messages,
       temperature: 0.2,
-      max_tokens: 2048,
+      max_tokens: 4096,
       response_format: { type: "json_object" }
     }),
-    signal: AbortSignal.timeout(15000),
+    signal: AbortSignal.timeout(20000),
   });
 
   if (!response.ok) throw new Error(`Groq Code Gen API error: ${response.status}`);
   const data = await response.json();
-  return data.choices[0]?.message?.content || '{}';
+  const msg = data.choices[0]?.message;
+  let rawContent = msg?.content || '';
+  if (!rawContent && msg?.reasoning) {
+    const start = msg.reasoning.indexOf('{');
+    const end = msg.reasoning.lastIndexOf('}');
+    if (start !== -1 && end !== -1) {
+      rawContent = msg.reasoning.slice(start, end + 1);
+    }
+  }
+  return rawContent || '{}';
 }
 
 async function callGeminiCodeGen(messages: any[]): Promise<string> {
@@ -57,7 +68,7 @@ async function callGeminiCodeGen(messages: any[]): Promise<string> {
       parts: [{ text: m.content }],
     }));
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`;
+  const url = `${AI_CONFIG.chat.fallback.apiUrl}/${AI_CONFIG.chat.fallback.model}:generateContent?key=${apiKey}`;
 
   const response = await fetch(url, {
     method: 'POST',
@@ -98,12 +109,19 @@ async function generateCodeJSON(prompt: string, context: ChatMessage[], errorFee
     { role: 'user', content: prompt }
   ];
 
-  // Hardened withFallback for code generation model
-  const rawContent = await withFallback(
-    () => callGroqCodeGen(messages),
-    () => callGeminiCodeGen(messages),
-    'Code Agent LLM Model'
-  );
+  // 3-tier fallback for code generation model: Primary Groq -> Secondary Groq -> Gemini
+  let rawContent: string;
+  try {
+    rawContent = await callGroqCodeGen(messages, AI_CONFIG.chat.primary.model);
+  } catch (primaryErr) {
+    console.warn('[CodeAgent] Primary Groq failed, trying secondary Groq:', (primaryErr as Error).message);
+    try {
+      rawContent = await callGroqCodeGen(messages, AI_CONFIG.chat.secondary.model);
+    } catch (secondaryErr) {
+      console.warn('[CodeAgent] Secondary Groq failed, falling back to Gemini:', (secondaryErr as Error).message);
+      rawContent = await callGeminiCodeGen(messages);
+    }
+  }
 
   return JSON.parse(rawContent) as CodeGenerationResult;
 }

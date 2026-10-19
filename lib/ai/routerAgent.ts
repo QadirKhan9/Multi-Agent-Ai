@@ -61,6 +61,11 @@ Available Intents:
 - "web_search": The user explicitly requests a web or internet search.
 - "voice_generation": The user wants text converted to speech or audio.
 
+CRITICAL RULE FOR MULTI-TURN CONVERSATIONS:
+- You must determine the intents required SOLELY for the user's latest incoming message.
+- Any preceding messages in the conversation history are provided STRICTLY for conversational context (e.g. resolving pronouns like "make it red" or "explain the second one").
+- NEVER re-execute or generate steps for previous user requests from earlier in the chat. Focus 100% on what the user is asking right now in the latest message.
+
 Instructions:
 1. Analyze the request. It may contain multiple intents (e.g., "search the web for X and then generate an image of it").
 2. CRITICAL RULE FOR SINGLE TASKS: When a user asks specifically to generate an image, write code, create a PDF, search the web, or synthesize voice, output ONLY that specific single specialized intent in the "steps" array. Do NOT add a redundant "chat" step alongside it unless the user explicitly requested a separate conversation response.
@@ -77,17 +82,22 @@ export async function routeIntent(userMessage: string, conversationHistory: Chat
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error('GROQ_API_KEY is not set');
 
+  // Strip userMessage from history if it was already appended before calling routeIntent
+  const cleanHistory = conversationHistory.filter(
+    (m, idx) => !(idx === conversationHistory.length - 1 && m.role === 'user' && m.content.trim() === userMessage.trim())
+  );
+
   const messages = [
     { role: 'system', content: ROUTER_SYSTEM_PROMPT },
-    // Only pass the last 5 messages for routing context to keep it fast
-    ...conversationHistory.slice(-5).map(m => ({
+    // Only pass the last 5 contextual messages to keep it fast
+    ...cleanHistory.slice(-5).map(m => ({
       role: m.role,
       content: m.content
     })),
     { role: 'user', content: userMessage }
   ];
 
-  try {
+  const tryGroqRoute = async (model: string): Promise<RouterDecision> => {
     const response = await fetch(AI_CONFIG.chat.primary.apiUrl, {
       method: 'POST',
       headers: {
@@ -95,86 +105,105 @@ export async function routeIntent(userMessage: string, conversationHistory: Chat
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: AI_CONFIG.chat.primary.model,
+        model,
         messages,
         temperature: 0.1, // Low temperature for deterministic classification
-        max_tokens: 1024,
+        max_tokens: 2048,
         response_format: { type: "json_object" }
       }),
       signal: AbortSignal.timeout(15000), // 15s timeout
     });
 
     if (!response.ok) {
-      throw new Error(`Groq Routing API error (${response.status})`);
+      throw new Error(`Groq Routing API error (${response.status}) with model ${model}`);
     }
 
     const data = await response.json();
-    const rawContent = data.choices[0]?.message?.content || '{}';
-    
-    // Parse the JSON. If it fails or is invalid, fallback to a default 'chat' decision
-    const parsed = JSON.parse(rawContent) as RouterDecision;
+    const msg = data.choices[0]?.message;
+    let rawContent = msg?.content || '';
+    if (!rawContent && msg?.reasoning) {
+      const start = msg.reasoning.indexOf('{');
+      const end = msg.reasoning.lastIndexOf('}');
+      if (start !== -1 && end !== -1) {
+        rawContent = msg.reasoning.slice(start, end + 1);
+      }
+    }
+    const parsed = JSON.parse(rawContent || '{}') as RouterDecision;
     
     if (!parsed.steps || !Array.isArray(parsed.steps) || parsed.steps.length === 0) {
-      throw new Error("Invalid router schema returned");
+      throw new Error(`Invalid router schema returned by model ${model}`);
     }
 
     return parsed;
-  } catch (error) {
-    console.error('[RouterAgent] Groq Routing failed, falling back to Gemini:', (error as Error).message);
+  };
+
+  // 1. Try Primary Groq Model
+  try {
+    return await tryGroqRoute(AI_CONFIG.chat.primary.model);
+  } catch (primaryError) {
+    console.warn('[RouterAgent] Primary Groq routing failed, trying secondary Groq:', (primaryError as Error).message);
     
+    // 2. Try Secondary Groq Model
     try {
-      const geminiApiKey = process.env.GEMINI_API_KEY;
-      if (!geminiApiKey) throw new Error('GEMINI_API_KEY is not set');
-
-      const systemInstruction = messages.find(m => m.role === 'system')?.content || '';
-      const contents = messages
-        .filter(m => m.role !== 'system')
-        .map(m => ({
-          role: m.role === 'assistant' ? 'model' : 'user',
-          parts: [{ text: m.content }],
-        }));
-
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${geminiApiKey}`;
-
-      const geminiResponse = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          system_instruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : undefined,
-          contents,
-          generationConfig: {
-            temperature: 0.1,
-            maxOutputTokens: 1024,
-            responseMimeType: "application/json"
-          },
-        }),
-        signal: AbortSignal.timeout(15000),
-      });
-
-      if (!geminiResponse.ok) {
-        throw new Error(`Gemini API error (${geminiResponse.status})`);
-      }
-
-      const geminiData = await geminiResponse.json();
-      const rawContent = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+      return await tryGroqRoute(AI_CONFIG.chat.secondary.model);
+    } catch (secondaryError) {
+      console.error('[RouterAgent] Secondary Groq routing failed, falling back to Gemini:', (secondaryError as Error).message);
       
-      const parsed = JSON.parse(rawContent) as RouterDecision;
-      if (!parsed.steps || !Array.isArray(parsed.steps) || parsed.steps.length === 0) {
-        throw new Error("Invalid router schema returned by Gemini");
+      // 3. Fallback to Gemini
+      try {
+        const geminiApiKey = process.env.GEMINI_API_KEY;
+        if (!geminiApiKey) throw new Error('GEMINI_API_KEY is not set');
+
+        const systemInstruction = messages.find(m => m.role === 'system')?.content || '';
+        const contents = messages
+          .filter(m => m.role !== 'system')
+          .map(m => ({
+            role: m.role === 'assistant' ? 'model' : 'user',
+            parts: [{ text: m.content }],
+          }));
+
+        const url = `${AI_CONFIG.chat.fallback.apiUrl}/${AI_CONFIG.chat.fallback.model}:generateContent?key=${geminiApiKey}`;
+
+        const geminiResponse = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            system_instruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : undefined,
+            contents,
+            generationConfig: {
+              temperature: 0.1,
+              maxOutputTokens: 1024,
+              responseMimeType: "application/json"
+            },
+          }),
+          signal: AbortSignal.timeout(15000),
+        });
+
+        if (!geminiResponse.ok) {
+          throw new Error(`Gemini API error (${geminiResponse.status})`);
+        }
+
+        const geminiData = await geminiResponse.json();
+        const rawContent = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+        
+        const parsed = JSON.parse(rawContent) as RouterDecision;
+        if (!parsed.steps || !Array.isArray(parsed.steps) || parsed.steps.length === 0) {
+          throw new Error("Invalid router schema returned by Gemini");
+        }
+        return parsed;
+      } catch (geminiError) {
+        console.error('[RouterAgent] Gemini fallback also failed, forcing basic chat:', (geminiError as Error).message);
+        // Safe fallback if all LLMs fail or timeout
+        return {
+          steps: [
+            {
+              intent: 'chat',
+              reasoning: 'Fallback due to dual API failures',
+              extractedQuery: userMessage
+            }
+          ]
+        };
       }
-      return parsed;
-    } catch (geminiError) {
-      console.error('[RouterAgent] Gemini fallback also failed, forcing basic chat:', (geminiError as Error).message);
-      // Safe fallback if BOTH LLMs fail or timeout
-      return {
-        steps: [
-          {
-            intent: 'chat',
-            reasoning: 'Fallback due to dual API failures',
-            extractedQuery: userMessage
-          }
-        ]
-      };
     }
   }
 }

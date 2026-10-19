@@ -5,12 +5,19 @@ export const AI_CONFIG = {
   chat: {
     primary: {
       provider: 'groq' as const,
-      model: 'llama-3.3-70b-versatile',
+      model: 'openai/gpt-oss-120b',
+      apiUrl: 'https://api.groq.com/openai/v1/chat/completions',
+    },
+    // Secondary Groq model used if the primary is unavailable/quota-limited
+    secondary: {
+      provider: 'groq' as const,
+      model: 'openai/gpt-oss-20b',
       apiUrl: 'https://api.groq.com/openai/v1/chat/completions',
     },
     fallback: {
       provider: 'gemini' as const,
-      model: 'gemini-flash-latest',
+      // Use the stable non-aliased model ID
+      model: 'gemini-2.0-flash',
       apiUrl: 'https://generativelanguage.googleapis.com/v1beta/models',
     },
   },

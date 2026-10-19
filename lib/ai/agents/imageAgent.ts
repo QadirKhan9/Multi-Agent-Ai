@@ -6,41 +6,33 @@ import { withFallback } from '../utils/withFallback';
 cloudinary.config(true);
 
 export async function runImageAgent(prompt: string, userId: string): Promise<AgentResponse> {
-  let providerUsed = "pollinations";
+  let providerUsed = "pollinations-turbo";
 
-  // Wrap image buffer fetching in withFallback
-  const imageBuffer = await withFallback(
-    async () => {
-      console.log(`[ImageAgent] Generating via Pollinations.ai: "${prompt}"`);
-      const seed = Math.floor(Math.random() * 1_000_000);
-      const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?nologo=true&seed=${seed}&width=768&height=768&model=flux`;
+  try {
+    // Wrap image buffer fetching in withFallback
+    const imageBuffer = await withFallback(
+      async () => {
+        console.log(`[ImageAgent] Generating via Pollinations.ai (turbo): "${prompt}"`);
+        const seed = Math.floor(Math.random() * 1_000_000);
+        const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?nologo=true&seed=${seed}&width=768&height=768&model=turbo`;
 
-      const res = await fetch(url, { signal: AbortSignal.timeout(45000) });
-      if (!res.ok) throw new Error(`Pollinations returned ${res.status}`);
-      providerUsed = "pollinations";
-      return await res.arrayBuffer();
-    },
-    async () => {
-      const hfApiKey = process.env.HUGGINGFACE_API_KEY;
-      if (!hfApiKey) throw new Error("HUGGINGFACE_API_KEY is not set");
-      console.log(`[ImageAgent] Falling back to Hugging Face...`);
+        const res = await fetch(url, { signal: AbortSignal.timeout(45000) });
+        if (!res.ok) throw new Error(`Pollinations Turbo returned ${res.status}`);
+        providerUsed = "pollinations-turbo";
+        return await res.arrayBuffer();
+      },
+      async () => {
+        console.log(`[ImageAgent] Falling back to standard Pollinations...`);
+        const seed = Math.floor(Math.random() * 1_000_000);
+        const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?nologo=true&seed=${seed}&width=768&height=768`;
 
-      const hfRes = await fetch(
-        "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0",
-        {
-          headers: { Authorization: `Bearer ${hfApiKey}`, "Content-Type": "application/json" },
-          method: "POST",
-          body: JSON.stringify({ inputs: prompt }),
-          signal: AbortSignal.timeout(60000),
-        }
-      );
-
-      if (!hfRes.ok) throw new Error(`Hugging Face returned ${hfRes.status}`);
-      providerUsed = "huggingface";
-      return await hfRes.arrayBuffer();
-    },
-    'Image Generation Agent'
-  );
+        const res = await fetch(url, { signal: AbortSignal.timeout(45000) });
+        if (!res.ok) throw new Error(`Standard Pollinations returned ${res.status}`);
+        providerUsed = "pollinations-standard";
+        return await res.arrayBuffer();
+      },
+      'Image Generation Agent'
+    );
 
   // Upload to Cloudinary
   let imageUrl = "";
@@ -75,10 +67,18 @@ export async function runImageAgent(prompt: string, userId: string): Promise<Age
     console.error(`[ImageAgent] DB save failed (non-fatal):`, dbError);
   }
 
-  return {
-    agentType: "image_generation",
-    content: `🎨 Here's your generated image for: **"${prompt}"**`,
-    imageUrl,
-    status: "success",
-  };
+    return {
+      agentType: "image_generation",
+      content: `🎨 Here's your generated image for: **"${prompt}"**`,
+      imageUrl,
+      status: "success",
+    };
+  } catch (error) {
+    console.error(`[ImageAgent] Generation failed:`, error);
+    return {
+      agentType: "image_generation",
+      content: `⚠️ Image generation failed: ${(error as Error).message}`,
+      status: "error",
+    };
+  }
 }
