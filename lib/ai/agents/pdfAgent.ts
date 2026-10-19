@@ -31,6 +31,32 @@ async function buildPdfBuffer(title: string, content: string, date: string): Pro
     }
   };
 
+  const cleanForPdf = (text: string, font: any): string => {
+    if (!text) return '';
+    const normalized = text
+      // Replace non-breaking hyphen, figure dash, horizontal bar, minus sign with standard hyphen
+      .replace(/[\u2010\u2011\u2012\u2015\u2212\uFE58\uFE63\uFF0D]/g, '-')
+      // Replace non-breaking space and other unicode spaces
+      .replace(/[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g, ' ')
+      // Replace ellipsis
+      .replace(/\u2026/g, '...')
+      // Replace curly quotes
+      .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+      .replace(/[\u201C\u201D\u201E\u201F]/g, '"');
+
+    let result = '';
+    for (const char of normalized) {
+      try {
+        font.encodeText(char);
+        result += char;
+      } catch {
+        // Fallback for emojis, special symbols or unsupported glyphs
+        result += ' ';
+      }
+    }
+    return result;
+  };
+
   const wrapText = (text: string, maxWidth: number, font: any, fontSize: number): string[] => {
     const words = text.split(' ');
     const lines: string[] = [];
@@ -50,8 +76,9 @@ async function buildPdfBuffer(title: string, content: string, date: string): Pro
   };
 
   const drawText = (text: string, font: any, size: number, color: any, xOffset = 0) => {
+    const safeText = cleanForPdf(text, font);
     const maxWidth = PAGE_WIDTH - MARGIN * 2 - xOffset;
-    const wrappedLines = wrapText(text, maxWidth, font, size);
+    const wrappedLines = wrapText(safeText, maxWidth, font, size);
     for (const line of wrappedLines) {
       checkPageBreak(size * 1.5);
       page.drawText(line, { x: MARGIN + xOffset, y: cursorY - size, size, font, color });
